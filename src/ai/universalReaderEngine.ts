@@ -149,11 +149,63 @@ export class UniversalReaderEngine {
 
     const functionUrl = this.config.functionUrl;
     if (functionUrl) {
-      const response = await fetch(functionUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
+      let response: Response;
+
+      // Detect if target is MARITIME_API (FastAPI expecting multipart/form-data)
+      const isFastApi = functionUrl.includes('/api/v1') || functionUrl.includes(':8000');
+
+      if (isFastApi) {
+        const formData = new FormData();
+
+        if (file && typeof file !== 'string') {
+          formData.append('file', file, fileName);
+        } else if (base64Data) {
+          // Convert base64 string to Blob for FormData
+          const byteCharacters = atob(base64Data);
+          const byteNumbers = new Array(byteCharacters.length);
+          for (let i = 0; i < byteCharacters.length; i++) {
+            byteNumbers[i] = byteCharacters.charCodeAt(i);
+          }
+          const byteArray = new Uint8Array(byteNumbers);
+          const blob = new Blob([byteArray], { type: mimeType });
+          formData.append('file', blob, fileName);
+        } else if (textContent) {
+          const blob = new Blob([textContent], { type: 'text/plain' });
+          formData.append('file', blob, 'extracted_text.txt');
+        }
+
+        if (destinations && destinations.length > 0) {
+          formData.append('destinations', JSON.stringify(destinations));
+        }
+        if (this.config.modelName) {
+          formData.append('model', this.config.modelName);
+        }
+
+        response = await fetch(functionUrl, {
+          method: 'POST',
+          body: formData,
+        });
+      } else {
+        // Cloud Functions JSON format
+        const payload = {
+          fileBase64: base64Data,
+          mimeType,
+          textContent,
+          fileName,
+          additionalContext: options.additionalContext,
+          destinations,
+          schemas,
+          systemRole: this.config.systemRole,
+          metadataFields: this.config.metadataFields,
+          fieldWeights
+        };
+
+        response = await fetch(functionUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+      }
 
       if (!response.ok) {
         const errText = await response.text();
@@ -161,9 +213,103 @@ export class UniversalReaderEngine {
       }
 
       const resultData = await response.json();
-      return resultData as UniversalReaderResult<T, C>;
+
+      const rawClassification = isFastApi ? resultData.classification : resultData.classification;
+      const detectedMetadata = (rawClassification?.caseMetadata || rawClassification?.metadata || {}) as Record<string, any>;
+
+      // Perform local case matching scoring against casesList
+      const proposals: CaseProposal<C>[] = [];
+      const weights = fieldWeights || { vessel: 40, imo: 35, port: 15, client: 10 };
+
+      if (casesList && casesList.length > 0) {
+        for (const c of casesList) {
+          let score = 0;
+          const reasons: string[] = [];
+
+          // Compare vessel name
+          const vesselVal = (c as any).vessel || (c as any).vesselName || (c as any).name;
+          const detectedVessel = detectedMetadata.vessel || detectedMetadata.vessel_name || detectedMetadata.ship;
+          if (vesselVal && detectedVessel) {
+            const sim = levenshteinSimilarity(String(vesselVal), String(detectedVessel));
+            if (sim > 0.7) {
+              score += Math.round(sim * (weights.vessel || 40));
+              reasons.push(`Vessel name match (${Math.round(sim * 100)}%)`);
+            }
+          }
+
+          // Compare IMO
+          const imoVal = (c as any).imo || (c as any).imoNumber;
+          const detectedImo = detectedMetadata.imo || detectedMetadata.imo_number;
+          if (imoVal && detectedImo) {
+            const sim = levenshteinSimilarity(String(imoVal), String(detectedImo));
+            if (sim > 0.85) {
+              score += (weights.imo || 35);
+              reasons.push(`IMO match (${String(imoVal)})`);
+            }
+          }
+
+          // Compare Port
+          const portVal = (c as any).port || (c as any).portName;
+          const detectedPort = detectedMetadata.port || detectedMetadata.port_name;
+          if (portVal && detectedPort) {
+            const sim = levenshteinSimilarity(String(portVal), String(detectedPort));
+            if (sim > 0.7) {
+              score += Math.round(sim * (weights.port || 15));
+              reasons.push(`Port match (${String(portVal)})`);
+            }
+          }
+
+          // Compare Client / Principal
+          const clientVal = (c as any).client || (c as any).clientName || (c as any).principal;
+          const detectedClient = detectedMetadata.client || detectedMetadata.client_name || detectedMetadata.principal || detectedMetadata.principal_name;
+          if (clientVal && detectedClient) {
+            const sim = levenshteinSimilarity(String(clientVal), String(detectedClient));
+            if (sim > 0.7) {
+              score += Math.round(sim * (weights.client || 10));
+              reasons.push(`Client match (${String(clientVal)})`);
+            }
+          }
+
+          const caseId = (c as any).id || (c as any).caseId || '';
+          const label = `${(c as any).vessel || 'Vessel'} • ${(c as any).port || 'Port'} (${caseId})${score > 0 ? ` [${score}% Match]` : ''}`;
+
+          proposals.push({
+            entityId: caseId,
+            entityData: c,
+            caseId,
+            caseData: c,
+            matchScore: score,
+            matchReasons: reasons,
+            formattedLabel: label
+          });
+        }
+
+        // Sort descending by match score
+        proposals.sort((a, b) => b.matchScore - a.matchScore);
+      }
+
+      const topSuggested = proposals.length > 0 && proposals[0].matchScore >= 30 ? proposals[0] : undefined;
+
+      const normalizedResult: UniversalReaderResult<T, C> = {
+        classification: {
+          destinationId: rawClassification?.destinationId || rawClassification?.destination_id || 'other',
+          destinationName: rawClassification?.destinationName || rawClassification?.destination_name || 'Generic Document',
+          confidence: rawClassification?.confidence || 0.9,
+          reasoning: rawClassification?.reasoning || rawClassification?.classificationNote || rawClassification?.classification_note || '',
+          classificationNote: rawClassification?.classificationNote || rawClassification?.classification_note || rawClassification?.rationale || '',
+          caseMetadata: detectedMetadata,
+        },
+        caseProposals: proposals,
+        suggestedCase: topSuggested,
+        extractedData: (isFastApi ? resultData.extracted_data : resultData.extractedData) || ({} as T)
+      };
+
+      return normalizedResult;
+
     }
 
     throw new Error('No functionUrl specified for UniversalReaderEngine client.');
   }
 }
+
+

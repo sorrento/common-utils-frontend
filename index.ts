@@ -9,4 +9,6 @@ export * from './src/hooks';
 export * from './src/ui';
 export * from './src/ai';
 export * from './src/auth';
+export * from './src/components/DocumentPreviewModal';
+
 

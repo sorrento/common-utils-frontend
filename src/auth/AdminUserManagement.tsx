@@ -20,7 +20,7 @@ export const AdminUserManagement: React.FC<AdminUserManagementProps> = ({ db, on
   const [showAddModal, setShowAddModal] = useState(false);
   const [newEmail, setNewEmail] = useState('');
   const [newName, setNewName] = useState('');
-  const [newRole, setNewRole] = useState(config.roles?.[0]?.id || 'Executive Operator');
+  const [newRole, setNewRole] = useState(config.roles?.[0]?.id || 'Operator');
   const [submitting, setSubmitting] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
@@ -35,7 +35,8 @@ export const AdminUserManagement: React.FC<AdminUserManagementProps> = ({ db, on
 
   const defaultRoles = config.roles || [
     { id: 'Admin', label: 'Admin', description: 'Full access & user management' },
-    { id: 'Executive Operator', label: 'Executive Operator', description: 'Operations, cases & disbursements management' },
+    { id: 'Management', label: 'Management', description: 'Access to Management Dashboard & Analytics' },
+    { id: 'Operator', label: 'Operator', description: 'Operations, cases & disbursements management' },
   ];
 
   const fetchUsers = async () => {
@@ -116,7 +117,7 @@ export const AdminUserManagement: React.FC<AdminUserManagementProps> = ({ db, on
   const openEditModal = (u: UserProfileData) => {
     setEditingUser(u);
     setEditName(u.displayName || '');
-    setEditRole(u.role || 'Executive Operator');
+    setEditRole(u.role || 'Operator');
   };
 
   const handleSaveEdit = async (e: React.FormEvent) => {

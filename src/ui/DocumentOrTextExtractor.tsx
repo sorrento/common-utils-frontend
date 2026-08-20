@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { UploadCloudIcon } from '../icons/Icons';
+import { UploadCloudIcon, SparklesIcon } from '../icons/Icons';
 
 export interface DocumentOrTextExtractorProps {
   /** Callback fired when a valid PDF, image or document file is uploaded */
@@ -28,7 +28,7 @@ export const DocumentOrTextExtractor: React.FC<DocumentOrTextExtractorProps> = (
   onFileUpload,
   onTextSubmit,
   loading = false,
-  title = 'Auto-fill Fields with AiDA AI (Optional)',
+  title = 'Auto-fill Fields with AI Extractor',
   subtitle = 'Scanning document with AI... Extracting vessel, ports & cargo...',
   acceptedFormats = '.pdf,image/*,.txt',
   dropAreaTitle = 'Drop PDF or Voyage Instructions here',
@@ -82,15 +82,16 @@ export const DocumentOrTextExtractor: React.FC<DocumentOrTextExtractorProps> = (
         background: '#f7f9fb',
         border: '1px solid #e0e3e5',
         borderRadius: '10px',
-        padding: '18px 20px',
-        marginBottom: '24px',
+        padding: '16px 18px',
+        marginBottom: '20px',
         transition: 'all 0.2s ease'
       }}
     >
       {/* Title */}
-      <div style={{ marginBottom: '14px' }}>
-        <span style={{ fontSize: '13px', fontWeight: 700, color: '#191c1e', display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <span>✨</span> {title}
+      <div style={{ marginBottom: '12px' }}>
+        <span style={{ fontSize: '12.5px', fontWeight: 700, color: '#191c1e', display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <SparklesIcon size={14} color="#7e22ce" />
+          <span>{title}</span>
         </span>
       </div>
 
