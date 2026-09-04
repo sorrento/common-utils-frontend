@@ -123,15 +123,10 @@ function escapeHtml(text: string): string {
     .replace(/'/g, '&#039;');
 }
 
-/* ==========================================================================
-   EXPORT TO PDF
-   ========================================================================== */
-
 /**
- * Generates and directly downloads a high-resolution PDF document.
- * Flexible: Supports simple text documents, key-value lists, or full executive report dashboards.
+ * Generates and returns a PDF document as a binary Blob without triggering immediate download.
  */
-export async function exportToPdf(options: PdfExportOptions): Promise<void> {
+export async function generatePdfBlob(options: PdfExportOptions): Promise<{ blob: Blob; filename: string }> {
   const lang = options.lang || 'es';
   const labels = I18N_LABELS[lang] || I18N_LABELS.es;
 
@@ -262,10 +257,26 @@ export async function exportToPdf(options: PdfExportOptions): Promise<void> {
     const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
 
     pdf.addImage(imgData, 'JPEG', 0, 0, pdfWidth, pdfHeight);
-    pdf.save(`${options.filename}.pdf`);
+    const blob = pdf.output('blob');
+    const filename = options.filename.endsWith('.pdf') ? options.filename : `${options.filename}.pdf`;
+    return { blob, filename };
   } finally {
     document.body.removeChild(container);
   }
+}
+
+/**
+ * Generates and directly downloads a high-resolution PDF document.
+ * Flexible: Supports simple text documents, key-value lists, or full executive report dashboards.
+ */
+export async function exportToPdf(options: PdfExportOptions): Promise<void> {
+  const { blob, filename } = await generatePdfBlob(options);
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  window.URL.revokeObjectURL(url);
 }
 
 function renderKpiGridHtml(kpis: KpiExportItem[]): string {
@@ -674,4 +685,191 @@ export async function exportToDoc(options: DocExportOptions): Promise<void> {
 }
 
 export const exportToWord = exportToDoc;
+
+/**
+ * Generates and returns an Excel document as a binary Blob.
+ */
+export async function generateExcelBlob(options: ExcelExportOptions): Promise<{ blob: Blob; filename: string }> {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = options.brandName || 'EXECUTIVE OS';
+  workbook.created = new Date();
+
+  const tabs: ExcelTabConfig[] = [];
+
+  if (options.quickTable) {
+    tabs.push({
+      name: options.quickTable.sheetName || 'Datos',
+      headers: options.quickTable.headers,
+      rows: options.quickTable.rows,
+    });
+  }
+
+  if (options.summaryTab) tabs.push(options.summaryTab);
+  if (options.detailTab) tabs.push(options.detailTab);
+  if (options.tabs && options.tabs.length > 0) {
+    tabs.push(...options.tabs);
+  }
+
+  if (tabs.length === 0) {
+    throw new Error('Debe proporcionar al menos una tabla o configuración de pestaña para exportar a Excel.');
+  }
+
+  for (const tabConfig of tabs) {
+    const sheet = workbook.addWorksheet(tabConfig.name, {
+      views: [{ showGridLines: true }],
+    });
+
+    let currentRow = 1;
+    const rawColor = (tabConfig.themeColor || options.themeColor || '16324F').replace('#', '').trim();
+    const tabHeaderColor = rawColor.length === 6 ? 'FF' + rawColor : rawColor;
+    const numCols = Math.max(tabConfig.headers.length, 1);
+
+    if (tabConfig.title) {
+      sheet.mergeCells(currentRow, 1, currentRow, numCols);
+      const titleCell = sheet.getCell(currentRow, 1);
+      titleCell.value = `${options.brandName ? options.brandName.toUpperCase() + ' — ' : ''}${tabConfig.title}`;
+      titleCell.font = { name: 'Calibri', size: 13, bold: true, color: { argb: 'FFFFFF' } };
+      titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: tabHeaderColor } };
+      titleCell.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
+      sheet.getRow(currentRow).height = 28;
+      currentRow++;
+    }
+
+    if (tabConfig.subtitle) {
+      const lang = options.lang || 'es';
+      const labels = I18N_LABELS[lang] || I18N_LABELS.es;
+      sheet.mergeCells(currentRow, 1, currentRow, numCols);
+      const subCell = sheet.getCell(currentRow, 1);
+      subCell.value = `${tabConfig.subtitle} | ${labels.date}: ${new Date().toLocaleDateString(labels.locale)}`;
+      subCell.font = { name: 'Calibri', size: 10, italic: true, color: { argb: '496074' } };
+      subCell.alignment = { vertical: 'middle', horizontal: 'left', indent: 1 };
+      sheet.getRow(currentRow).height = 20;
+      currentRow++;
+    }
+
+    if (tabConfig.title || tabConfig.subtitle) {
+      currentRow++;
+    }
+
+    if (tabConfig.kpis && tabConfig.kpis.length > 0) {
+      tabConfig.kpis.forEach((kpi, index) => {
+        const colStart = (index * 2) + 1;
+        const colEnd = colStart + 1;
+        if (colEnd <= numCols) {
+          sheet.mergeCells(currentRow, colStart, currentRow, colEnd);
+          sheet.mergeCells(currentRow + 1, colStart, currentRow + 1, colEnd);
+
+          const labelCell = sheet.getCell(currentRow, colStart);
+          labelCell.value = kpi.label.toUpperCase();
+          labelCell.font = { name: 'Calibri', size: 9, bold: true, color: { argb: '5A738E' } };
+          labelCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'F0F4F8' } };
+
+          const valCell = sheet.getCell(currentRow + 1, colStart);
+          valCell.value = kpi.value;
+          valCell.font = { name: 'Calibri', size: 14, bold: true, color: { argb: '0F2942' } };
+          valCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'F0F4F8' } };
+        }
+      });
+      currentRow += 3;
+    }
+
+    const headerRow = sheet.getRow(currentRow);
+    tabConfig.headers.forEach((headerText, idx) => {
+      const cell = headerRow.getCell(idx + 1);
+      cell.value = headerText;
+      cell.font = { name: 'Calibri', size: 11, bold: true, color: { argb: 'FFFFFF' } };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: tabHeaderColor } };
+      cell.alignment = { vertical: 'middle', horizontal: 'left' };
+      cell.border = {
+        top: { style: 'thin', color: { argb: 'D2DDE6' } },
+        bottom: { style: 'medium', color: { argb: 'B0C4DE' } },
+        left: { style: 'thin', color: { argb: 'D2DDE6' } },
+        right: { style: 'thin', color: { argb: 'D2DDE6' } },
+      };
+    });
+    headerRow.height = 24;
+    currentRow++;
+
+    tabConfig.rows.forEach((rowData, rIdx) => {
+      const r = sheet.getRow(currentRow);
+      const isEven = rIdx % 2 === 0;
+      const rowBgColor = isEven ? 'FFFFFFFF' : 'FFF8FAFC';
+
+      rowData.forEach((val, cIdx) => {
+        const cell = r.getCell(cIdx + 1);
+        cell.value = val;
+        cell.font = { name: 'Calibri', size: 10.5, color: { argb: '102033' } };
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: rowBgColor } };
+        cell.alignment = {
+          vertical: 'middle',
+          horizontal: typeof val === 'number' ? 'right' : 'left',
+        };
+        if (tabConfig.columnFormats && tabConfig.columnFormats[cIdx]) {
+          cell.numFmt = tabConfig.columnFormats[cIdx];
+        } else if (typeof val === 'number') {
+          cell.numFmt = Number.isInteger(val) ? '#,##0' : '#,##0.00';
+        }
+        cell.border = {
+          top: { style: 'thin', color: { argb: 'E1E9F0' } },
+          bottom: { style: 'thin', color: { argb: 'E1E9F0' } },
+          left: { style: 'thin', color: { argb: 'E1E9F0' } },
+          right: { style: 'thin', color: { argb: 'E1E9F0' } },
+        };
+      });
+      r.height = 20;
+      currentRow++;
+    });
+
+    tabConfig.headers.forEach((h, colIdx) => {
+      let maxLen = h ? String(h).length : 10;
+      tabConfig.rows.forEach(row => {
+        const rawVal = row[colIdx];
+        let cellVal = rawVal != null ? String(rawVal) : '';
+        if (typeof rawVal === 'number') {
+          cellVal = rawVal.toLocaleString('en-US', { minimumFractionDigits: Number.isInteger(rawVal) ? 0 : 2 });
+        }
+        if (cellVal.length < 60) {
+          maxLen = Math.max(maxLen, cellVal.length);
+        }
+      });
+      const col = sheet.getColumn(colIdx + 1);
+      col.width = Math.min(Math.max(maxLen + 4, 12), 42);
+    });
+  }
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const filename = options.filename.endsWith('.xlsx') ? options.filename : `${options.filename}.xlsx`;
+  return { blob, filename };
+}
+
+/* ==========================================================================
+   EXPORT MULTIPLE FILES AS A COMPRESSED ZIP ARCHIVE
+   ========================================================================== */
+
+export interface ZipFileItem {
+  name: string;
+  blob: Blob | Uint8Array | ArrayBuffer | string;
+}
+
+/**
+ * Packages multiple files into a single `.zip` file and triggers a browser download.
+ * Completely avoids popup and multi-download blocking in modern browsers.
+ */
+export async function exportFilesToZip(zipFilename: string, files: ZipFileItem[]): Promise<void> {
+  const JSZip = (await import('jszip')).default;
+  const zip = new JSZip();
+
+  files.forEach(f => {
+    zip.file(f.name, f.blob);
+  });
+
+  const content = await zip.generateAsync({ type: 'blob' });
+  const url = window.URL.createObjectURL(content);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = zipFilename.endsWith('.zip') ? zipFilename : `${zipFilename}.zip`;
+  a.click();
+  window.URL.revokeObjectURL(url);
+}
 
